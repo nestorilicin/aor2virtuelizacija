@@ -8,4 +8,10 @@ static inline void outb(uint16_t port, uint8_t value)
 	asm("outb %0,%1" : /* empty */ : "a" (value), "Nd" (port) : "memory");
 }
 
+static inline uint8_t inb(uint16_t port)
+{
+    uint8_t ret;
+    asm volatile("inb %1,%0" : "=a"(ret) : "Nd"(port));
+    return ret;
+}
 #endif /* IO_H */
