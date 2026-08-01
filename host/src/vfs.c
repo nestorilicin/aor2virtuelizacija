@@ -1,4 +1,16 @@
 #include "vfs.h"
+#include <ctype.h>
+
+static int validate_filename(const char *name) {
+    if (!name || !name[0]) return 0;
+    if (!isalpha((unsigned char)name[0])) return 0;
+    for (const char *p = name; *p; ++p) {
+        unsigned char c = (unsigned char)*p;
+        if (isalpha(c) || isdigit(c) || c == '.' || c == '_') continue;
+        return 0;
+    }
+    return 1;
+}
 
 int allocate_guest_fd(struct vm_args* va, int host_fd) {
     if (va->next_guest_fd >= MAX_FDS)
@@ -38,6 +50,14 @@ void process_open(struct vm_args* va, struct parser_state* ps, uint8_t value) {
             ps->waiting_for_flag = 1;
         }
     } else {
+        if (!validate_filename(ps->path_buf)) {
+            va->last_result = -1;
+            /* reset parser state */
+            ps->current_cmd = 0;
+            ps->path_len = 0;
+            ps->waiting_for_flag = 0;
+            return;
+        }
         int guest_flags = (int)value;
         int host_flags = guest_flags_to_host(guest_flags);
         int host_fd;

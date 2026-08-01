@@ -64,6 +64,10 @@ __attribute__((noreturn))
 __attribute__((section(".start")))
 _start(void)
 {
+	int incorrect_fd = open("dobar///dan.txt", O_CREATE);
+	serial_puts("B2: open(incorrect, O_CREATE) -> fd=");
+	serial_put_int(incorrect_fd);
+	serial_puts(incorrect_fd < 0 ? " (OK, expected -1)\n" : " (FAIL, expected - 1)\n");
 	int missing_fd = open("b2_missing.txt", O_RD);
 	serial_puts("B2: open(missing, O_RD) -> fd=");
 	serial_put_int(missing_fd);
