@@ -1,38 +1,17 @@
 #if !defined(VFS_H)
 #define VFS_H
-#include <stdint.h>
-#include <unistd.h>
 #include <fcntl.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
-#include "vm.h"
 #include "protocol.h"
+#include "vm.h"
 
-struct parser_state {
-    int current_cmd;
-
-    char path_buf[128];
-    int path_len;
-    int waiting_for_flag;
-
-    int tmp_fd;
-    int tmp_count;
-
-    int w_fd;
-    int w_count;
-    int w_pos;
-    char w_buf[512];
-
-    int l_fd;
-    uint32_t l_offset_acc;
-    int l_offset_pos;
-    int l_whence;
-
-    int result32_pending;
-    uint32_t result32_val;
-    int result32_pos;
-};
-
-void parser_init(struct parser_state *ps);
+void parser_init(struct parser_state* ps);
 
 int allocate_guest_fd(struct vm_args* va, int host_fd);
 int map_fd(struct vm_args* va, int guest_fd);

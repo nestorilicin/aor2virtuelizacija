@@ -27,6 +27,6 @@ struct parser_state {
     int result32_pos;
 };
 
-void parser_init(struct parser_state *ps);
+void parser_init(struct parser_state* ps);
 void parser_set_value(struct parser_state* ps, uint8_t value);
 #endif // PROTOCOL_H

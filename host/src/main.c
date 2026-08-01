@@ -1,3 +1,4 @@
+#include "console.h"
 #include "protocol.h"
 #include "vfs.h"
 #include "vm.h"
@@ -68,7 +69,6 @@ void* run_vm(void* arg) {
     va->read_buffer_pos = 0;
     va->read_pending = 0;
 
-    /* parser state per-VM (drži se u okviru niti) */
     struct parser_state ps;
     parser_init(&ps);
 
@@ -86,8 +86,8 @@ void* run_vm(void* arg) {
                 uint16_t port = va->v.run->io.port;
                 if (port == 0xE9) {
                     if (va->v.run->io.direction == KVM_EXIT_IO_OUT) {
-                        printf("%c", *(p + va->v.run->io.data_offset));
-                        fflush(stdout);
+                        char ch = *(p + va->v.run->io.data_offset);
+                        console_write_char(va, ch);
                     } else if (va->v.run->io.direction == KVM_EXIT_IO_IN) {
                         *(p + va->v.run->io.data_offset) = getchar();
                     }
@@ -97,13 +97,12 @@ void* run_vm(void* arg) {
                     if (va->v.run->io.direction == KVM_EXIT_IO_OUT) {
                         uint8_t value = *(p + va->v.run->io.data_offset);
 
-                        /* Ako nemamo aktivnu komandu, prvi bajt je komanda */
+                        // no active cmd, first byte is cmd
                         if (ps.current_cmd == 0) {
                             parser_set_value(&ps, value);
                             break;
                         }
-
-                        /* dispatch po komandi */
+                        // calls from vfs.c
                         switch (ps.current_cmd) {
                             case V_FILE_OPEN:
                                 process_open(va, &ps, value);
@@ -118,46 +117,42 @@ void* run_vm(void* arg) {
                                 process_write(va, &ps, value);
                                 break;
                             case V_FILE_LSEEK:
-
                                 process_lseek(va, &ps, value);
                                 break;
                             default:
-                                /* nepoznata komanda */
+                                // not expected
                                 va->last_result = -1;
                                 ps.current_cmd = 0;
                                 break;
                         }
                         break;
                     } else if (va->v.run->io.direction == KVM_EXIT_IO_IN) {
-                        /* gost očekuje rezultat ili bajt iz read_buffer */
+                        // guest waiting for response or byte from buffer
                         uint8_t* dst = (uint8_t*)(p + va->v.run->io.data_offset);
                         if (ps.result32_pending) {
                             *dst = (uint8_t)((ps.result32_val >> (8 * ps.result32_pos)) & 0xFF);
-
                             ps.result32_pos++;
-
                             if (ps.result32_pos >= 4) {
                                 ps.result32_pending = 0;
                                 ps.result32_pos = 0;
                             }
-
                             break;
                         }
                         if (va->read_pending == 1) {
-                            /* prvo vratimo broj pročitanih bajtova (n) kao jedan bajt */
+                            // first send number of bytes of data
                             *dst = (uint8_t)va->last_result;
                             va->read_pending = 2; /* sledeci IN vraća podatke (ako ih ima) */
                         } else if (va->read_pending == 2 && va->read_buffer_pos < va->read_buffer_len) {
-                            /* vraćamo podatke iz bafera redom */
+                            // sending data
                             *dst = (uint8_t)va->read_buffer[va->read_buffer_pos++];
-                            /* ako smo poslali sve podatke, resetujemo stanje */
+                            // all sent: reset
                             if (va->read_buffer_pos >= va->read_buffer_len) {
                                 va->read_pending = 0;
                                 va->read_buffer_len = 0;
                                 va->read_buffer_pos = 0;
                             }
                         } else {
-                            /* nema pending read, vratimo poslednji rezultat kao jedan bajt */
+                            // return last_result
                             *dst = (uint8_t)va->last_result;
                         }
                     }
@@ -175,6 +170,7 @@ void* run_vm(void* arg) {
                 }
                 break;
             case KVM_EXIT_HLT:
+                console_flush(va);
                 printf("KVM_EXIT_HLT (guest %s)\n", va->guest_image);
                 stop = 1;
                 break;
@@ -198,7 +194,12 @@ void* run_vm(void* arg) {
                 break;
         }
     }
-
+    for (int i = 0; i < va->cow_count; i++) {
+        if (va->cow_map[i].active) {
+            unlink(va->cow_map[i].local_path);
+            va->cow_map[i].active = 0;
+        }
+    }
     vm_destroy(&va->v);
     return NULL;
 }
@@ -208,6 +209,9 @@ int main(int argc, char* argv[]) {
     int page_size = 0;
     const char* guest_images[MAX_GUESTS];
     int guest_count = 0;
+
+    struct shared_list shared_files[MAX_SHARED_FILES];
+    int shared_count = 0;
     // Parsiranje argumenata - uradio robot
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-m") || !strcmp(argv[i], "--memory")) {
@@ -230,9 +234,25 @@ int main(int argc, char* argv[]) {
                 }
                 guest_images[guest_count++] = argv[++i];
             }
+        } else if (!strcmp(argv[i], "-f") || !strcmp(argv[i], "--file")) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Missing argument for -f/--file\n");
+                return 1;
+            }
+            if (shared_count >= MAX_SHARED_FILES) {
+                fprintf(stderr, "Too many shared files (max %d)\n", MAX_SHARED_FILES);
+                return 1;
+            }
+            strncpy(shared_files[shared_count].path, argv[++i], MAX_PATH_LEN - 1);
+            shared_files[shared_count].path[MAX_PATH_LEN - 1] = '\0';
+            shared_count++;
+            continue;
         }
     }
-
+    if (console_init() < 0) {
+        fprintf(stderr, "Failed to init console mutex\n");
+        return 1;
+    }
     if (mem_size == 0 || page_size == 0 || guest_count == 0) {
         fprintf(stderr, "Usage: %s -m <2|4|8> -p <4|2> -g <guest1.img> [guest2.img ...]\n", argv[0]);
         return 1;
@@ -241,10 +261,23 @@ int main(int argc, char* argv[]) {
     pthread_t tids[MAX_GUESTS];
     struct vm_args args[MAX_GUESTS];
 
+    // init and thread create
     for (int g = 0; g < guest_count; g++) {
         args[g].guest_image = guest_images[g];
         args[g].mem_size = mem_size;
         args[g].page_size = page_size;
+
+        args[g].shared_files = shared_files;
+        args[g].shared_count = shared_count;
+        args[g].vm_id = g;
+
+        for (int k = 0; k < MAX_COW_ENTRIES; k++) {
+            args[g].cow_map[k].active = 0;
+            args[g].cow_map[k].orig_path[0] = '\0';
+            args[g].cow_map[k].local_path[0] = '\0';
+        }
+        args[g].cow_count = 0;
+
         pthread_create(&tids[g], NULL, run_vm, &args[g]);
     }
 
@@ -252,5 +285,6 @@ int main(int argc, char* argv[]) {
         pthread_join(tids[g], NULL);
     }
 
+    console_destroy();
     return 0;
 }

@@ -39,19 +39,44 @@ struct vm {
     int run_mmap_size;
 };
 
+#define MAX_SHARED_FILES 64
+#define MAX_COW_ENTRIES 64
+#define MAX_PATH_LEN 256
+#define CONSOLE_BUF_SIZE 512
+
+struct shared_list {
+    char path[MAX_PATH_LEN];
+};
+
+struct cow_entry {
+    char orig_path[MAX_PATH_LEN];  
+    char local_path[MAX_PATH_LEN]; 
+    int active;                    
+};
 struct vm_args {
     struct vm v;
     const char* guest_image;
     size_t mem_size;
     int page_size;
 
-	int guest_fd_to_host_fd[MAX_FDS];
-	int next_guest_fd;
-	int last_result;
-	char read_buffer[32];
-	int read_buffer_len;
-	int read_buffer_pos;
+    int guest_fd_to_host_fd[MAX_FDS];
+    int next_guest_fd;
+    int last_result;
+    char read_buffer[32];
+    int read_buffer_len;
+    int read_buffer_pos;
     int read_pending;
+
+    struct shared_list* shared_files; /* pokazivač na globalnu listu u main */
+    int shared_count;
+
+    struct cow_entry cow_map[MAX_COW_ENTRIES];
+    int cow_count;
+
+    int vm_id;
+
+    char console_buf[CONSOLE_BUF_SIZE];
+    int console_buf_pos;
 };
 
 int vm_init(struct vm* v, size_t mem_size);
