@@ -23,6 +23,12 @@
 #define EFER_LME (1u << 8)
 #define EFER_LMA (1u << 10)
 
+#define V_FILE_OPEN 1
+#define V_FILE_CLOSE 2
+#define V_FILE_READ 3
+#define V_FILE_WRITE 4
+#define V_FILE_LSEEK 5
+#define MAX_FDS 64
 struct vm {
     int kvm_fd;
     int vm_fd;
@@ -38,6 +44,14 @@ struct vm_args {
     const char* guest_image;
     size_t mem_size;
     int page_size;
+
+	int guest_fd_to_host_fd[MAX_FDS];
+	int next_guest_fd;
+	int last_result;
+	char read_buffer[32];
+	int read_buffer_len;
+	int read_buffer_pos;
+    int read_pending;
 };
 
 int vm_init(struct vm* v, size_t mem_size);

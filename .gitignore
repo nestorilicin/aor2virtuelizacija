@@ -6,3 +6,4 @@ host/build/
 *.exe
 *.out
 *.elf
+*.txt
