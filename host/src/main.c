@@ -1,5 +1,6 @@
 #include "console.h"
 #include "protocol.h"
+#include "shared.h"
 #include "vfs.h"
 #include "vm.h"
 
@@ -13,6 +14,158 @@
 #include <unistd.h>
 
 #define MAX_GUESTS 10
+static void handle_port_510(struct vm_args* va, char* kvm_run_ptr) {
+    int direction = va->v.run->io.direction;
+    if (direction == KVM_EXIT_IO_OUT) {
+        if (va->irq_role != VM_ROLE_WRITER)
+            return; // not expected
+
+        uint8_t byte = *(uint8_t*)(kvm_run_ptr + va->v.run->io.data_offset);
+
+        if (va->w_count_pos < 4) {
+            va->w_count |= ((uint32_t)byte) << (8 * va->w_count_pos);
+            va->w_count_pos++;
+
+            if (va->w_count_pos == 4) {
+                if (va->w_count > BUFFER_SIZE)
+                    va->w_count = BUFFER_SIZE;
+                va->w_data_pos = 0;
+
+                // 0 sentinel
+                if (va->w_count == 0) {
+                    pthread_mutex_lock(&g_shared.mutex);
+                    g_shared.buf_len = 0;
+                    g_shared.readers_done = 0;
+                    g_shared.seq++;
+                    g_shared.data_ready = 1;
+                    pthread_cond_broadcast(&g_shared.cond_data);
+                    pthread_mutex_unlock(&g_shared.mutex);
+
+                    va->w_count_pos = 0;
+                    va->w_count = 0;
+                    va->w_data_pos = 0;
+                    va->w_ack_pos = 0;
+                }
+            }
+        } else {
+            // temp bafer
+            if (va->w_data_pos < BUFFER_SIZE)
+                va->w_tmp_buf[va->w_data_pos] = byte;
+            va->w_data_pos++;
+
+            if (va->w_data_pos >= va->w_count) {
+                // copy tmp -> g_shared.buf
+                pthread_mutex_lock(&g_shared.mutex);
+                memcpy(g_shared.buf, va->w_tmp_buf, va->w_count);
+                g_shared.buf_len = va->w_count;
+                g_shared.readers_done = 0;
+                g_shared.seq++;
+                g_shared.data_ready = 1;
+                pthread_cond_broadcast(&g_shared.cond_data);
+                pthread_mutex_unlock(&g_shared.mutex);
+
+                va->w_count_pos = 0;
+                va->w_count = 0;
+                va->w_data_pos = 0;
+                va->w_ack_pos = 0;
+            }
+        }
+        return;
+    }
+
+    if (direction == KVM_EXIT_IO_IN) {
+        uint8_t* dst = (uint8_t*)(kvm_run_ptr + va->v.run->io.data_offset);
+
+        if (!va->irq_mode_sent) {
+            *dst = (uint8_t)va->irq_role;
+            va->irq_mode_sent = 1;
+            return;
+        }
+
+        if (va->irq_role != VM_ROLE_READER)
+            return;
+
+        if (va->r_count_pos < 4) {
+            pthread_mutex_lock(&g_shared.mutex);
+
+            if (va->r_count_pos == 0) {
+                while (!g_shared.data_ready || g_shared.seq == va->r_last_seq)
+                    pthread_cond_wait(&g_shared.cond_data, &g_shared.mutex);
+                va->r_last_seq = g_shared.seq;
+            } else {
+                while (!g_shared.data_ready)
+                    pthread_cond_wait(&g_shared.cond_data, &g_shared.mutex);
+            }
+
+            *dst = (uint8_t)((g_shared.buf_len >> (8 * va->r_count_pos)) & 0xFF);
+            pthread_mutex_unlock(&g_shared.mutex);
+
+            va->r_count_pos++;
+            if (va->r_count_pos == 4) {
+                va->r_count = g_shared.buf_len;
+                va->r_data_pos = 0;
+            }
+        } else if (va->r_data_pos < va->r_count) {
+            pthread_mutex_lock(&g_shared.mutex);
+            *dst = g_shared.buf[va->r_data_pos];
+            pthread_mutex_unlock(&g_shared.mutex);
+            va->r_data_pos++;
+        }
+    }
+}
+
+static void handle_port_520(struct vm_args* va, char* kvm_run_ptr) {
+    int direction = va->v.run->io.direction;
+
+    if (direction == KVM_EXIT_IO_IN) {
+        if (va->irq_role != VM_ROLE_WRITER)
+            return;
+
+        uint8_t* dst = (uint8_t*)(kvm_run_ptr + va->v.run->io.data_offset);
+
+        pthread_mutex_lock(&g_shared.mutex);
+        while (g_shared.readers_done < g_shared.total_readers)
+            pthread_cond_wait(&g_shared.cond_done, &g_shared.mutex);
+        uint32_t written = g_shared.buf_len;
+        pthread_mutex_unlock(&g_shared.mutex);
+
+        *dst = (uint8_t)((written >> (8 * va->w_ack_pos)) & 0xFF);
+        va->w_ack_pos++;
+
+        if (va->w_ack_pos >= 4) {
+            va->w_ack_pos = 0;
+            pthread_mutex_lock(&g_shared.mutex);
+            g_shared.data_ready = 0;
+            g_shared.readers_done = 0;
+            pthread_mutex_unlock(&g_shared.mutex);
+        }
+        return;
+    }
+
+    if (direction == KVM_EXIT_IO_OUT) {
+        if (va->irq_role != VM_ROLE_READER)
+            return;
+
+        uint8_t byte = *(uint8_t*)(kvm_run_ptr + va->v.run->io.data_offset);
+
+        va->r_ack_acc |= ((uint32_t)byte) << (8 * va->r_ack_pos);
+        va->r_ack_pos++;
+
+        if (va->r_ack_pos >= 4) {
+            va->r_ack_pos = 0;
+            va->r_ack_acc = 0;
+            va->r_count_pos = 0;
+            va->r_count = 0;
+            va->r_data_pos = 0;
+
+            pthread_mutex_lock(&g_shared.mutex);
+            g_shared.readers_done++;
+            if (g_shared.readers_done >= g_shared.total_readers)
+                pthread_cond_signal(&g_shared.cond_done);
+            pthread_mutex_unlock(&g_shared.mutex);
+        }
+    }
+}
 
 void* run_vm(void* arg) {
     struct vm_args* va = (struct vm_args*)arg;
@@ -60,6 +213,7 @@ void* run_vm(void* arg) {
 
     va->v.run->request_interrupt_window = (irq_pending > 0);
 
+    // druga faza
     for (int i = 0; i < MAX_FDS; i++) {
         va->guest_fd_to_host_fd[i] = -1;
     }
@@ -68,6 +222,19 @@ void* run_vm(void* arg) {
     va->read_buffer_len = 0;
     va->read_buffer_pos = 0;
     va->read_pending = 0;
+
+    // treca faza
+    va->irq_mode_sent = 0;
+    va->w_count_pos = 0;
+    va->w_count = 0;
+    va->w_data_pos = 0;
+    va->w_ack_pos = 0;
+    va->r_count_pos = 0;
+    va->r_count = 0;
+    va->r_data_pos = 0;
+    va->r_ack_pos = 0;
+    va->r_ack_acc = 0;
+    va->r_last_seq = (uint32_t)(-1);
 
     struct parser_state ps;
     parser_init(&ps);
@@ -79,10 +246,10 @@ void* run_vm(void* arg) {
             vm_destroy(&va->v);
             return NULL;
         }
+        char* p = (char*)va->v.run;
 
         switch (va->v.run->exit_reason) {
             case KVM_EXIT_IO: {
-                char* p = (char*)va->v.run;
                 uint16_t port = va->v.run->io.port;
                 if (port == 0xE9) {
                     if (va->v.run->io.direction == KVM_EXIT_IO_OUT) {
@@ -127,7 +294,6 @@ void* run_vm(void* arg) {
                         }
                         break;
                     } else if (va->v.run->io.direction == KVM_EXIT_IO_IN) {
-                        // guest waiting for response or byte from buffer
                         uint8_t* dst = (uint8_t*)(p + va->v.run->io.data_offset);
                         if (ps.result32_pending) {
                             *dst = (uint8_t)((ps.result32_val >> (8 * ps.result32_pos)) & 0xFF);
@@ -139,9 +305,8 @@ void* run_vm(void* arg) {
                             break;
                         }
                         if (va->read_pending == 1) {
-                            // first send number of bytes of data
                             *dst = (uint8_t)va->last_result;
-                            va->read_pending = 2; /* sledeci IN vraća podatke (ako ih ima) */
+                            va->read_pending = 2;
                         } else if (va->read_pending == 2 && va->read_buffer_pos < va->read_buffer_len) {
                             // sending data
                             *dst = (uint8_t)va->read_buffer[va->read_buffer_pos++];
@@ -156,28 +321,43 @@ void* run_vm(void* arg) {
                             *dst = (uint8_t)va->last_result;
                         }
                     }
+                    break;
+                }
+                if (port == 0x510) {
+                    handle_port_510(va, p);
+                    break;
+                }
+                if (port == 0x520) {
+                    handle_port_520(va, p);
+                    break;
                 }
                 break;
             }
-            case KVM_EXIT_IRQ_WINDOW_OPEN:
+            case KVM_EXIT_IRQ_WINDOW_OPEN: {
                 if (irq_pending > 0) {
                     if (inject_irq(&va->v, IRQ_NUM) < 0) {
                         stop = 1;
+                        break;
                     }
                     irq_pending--;
-                } else {
-                    va->v.run->request_interrupt_window = 0;
                 }
+                if (irq_pending == 0)
+                    va->v.run->request_interrupt_window = 0;
                 break;
+            }
             case KVM_EXIT_HLT:
                 console_flush(va);
                 printf("KVM_EXIT_HLT (guest %s)\n", va->guest_image);
                 stop = 1;
                 break;
-            case KVM_EXIT_SHUTDOWN:
-                fprintf(stderr, "KVM_EXIT_SHUTDOWN (guest %s)\n", va->guest_image);
+            case KVM_EXIT_SHUTDOWN: {
+                struct kvm_regs dbg_regs;
+                ioctl(va->v.vcpu_fd, KVM_GET_REGS, &dbg_regs);
+                fprintf(stderr, "KVM_EXIT_SHUTDOWN (VM %d) RIP=0x%llx RSP=0x%llx\n", va->vm_id,
+                        (unsigned long long)dbg_regs.rip, (unsigned long long)dbg_regs.rsp);
                 stop = 1;
                 break;
+            }
             case KVM_EXIT_FAIL_ENTRY:
                 fprintf(stderr, "KVM_EXIT_FAIL_ENTRY (guest %s) reason=0x%llx\n", va->guest_image,
                         (unsigned long long)va->v.run->fail_entry.hardware_entry_failure_reason);
@@ -216,8 +396,8 @@ int main(int argc, char* argv[]) {
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-m") || !strcmp(argv[i], "--memory")) {
             mem_size = atoi(argv[++i]) << 20;
-            if (mem_size != (2 << 20) && mem_size != (4 << 20) && mem_size != (8 << 20) && mem_size != (16 << 20)) {
-                fprintf(stderr, "Invalid memory size. Allowed: 2,4,8,16 MB\n");
+            if (mem_size != (2 << 20) && mem_size != (4 << 20) && mem_size != (8 << 20)) {
+                fprintf(stderr, "Invalid memory size. Allowed: 2,4,8 MB\n");
                 return 1;
             }
         } else if (!strcmp(argv[i], "-p") || !strcmp(argv[i], "--page")) {
@@ -258,6 +438,13 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    int num_readers = (guest_count > 1) ? (guest_count - 1) : 0;
+    if (num_readers > 0) {
+        if (shared_init(num_readers) < 0) {
+            fprintf(stderr, "Failed to init shared buffer\n");
+            return 1;
+        }
+    }
     pthread_t tids[MAX_GUESTS];
     struct vm_args args[MAX_GUESTS];
 
@@ -270,6 +457,8 @@ int main(int argc, char* argv[]) {
         args[g].shared_files = shared_files;
         args[g].shared_count = shared_count;
         args[g].vm_id = g;
+
+        args[g].irq_role = (g == 0) ? VM_ROLE_WRITER : VM_ROLE_READER;
 
         for (int k = 0; k < MAX_COW_ENTRIES; k++) {
             args[g].cow_map[k].active = 0;
@@ -284,6 +473,9 @@ int main(int argc, char* argv[]) {
     for (int g = 0; g < guest_count; g++) {
         pthread_join(tids[g], NULL);
     }
+
+    if (num_readers > 0)
+        shared_destroy();
 
     console_destroy();
     return 0;

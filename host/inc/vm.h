@@ -10,7 +10,7 @@
 #define GUEST_CODE_PAGES 16
 
 #define IRQ_NUM 32
-#define IRQ_COUNT 3
+#define IRQ_COUNT 1
 
 #define PDE64_PRESENT (1u << 0)
 #define PDE64_RW (1u << 1)
@@ -77,6 +77,26 @@ struct vm_args {
 
     char console_buf[CONSOLE_BUF_SIZE];
     int console_buf_pos;
+
+    // FAZA V
+    int irq_role; // WRITER ili READER
+    int irq_mode_sent;
+    // writer
+    int w_count_pos;
+    uint32_t w_count;
+    uint32_t w_data_pos;
+    uint8_t w_tmp_buf[256]; // BUFFFER_SIZE
+    int w_ack_pos;
+
+    // reader
+    int r_count_pos;
+    uint32_t r_count;
+    uint32_t r_data_pos;
+    int r_ack_pos;
+    uint32_t r_ack_acc;
+
+    uint32_t r_last_seq;
+
 };
 
 int vm_init(struct vm* v, size_t mem_size);

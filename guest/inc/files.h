@@ -8,9 +8,9 @@
 
 #define SEEK_SET_GUEST 1
 #define SEEK_END_GUEST 2
-#define SEEK_CUR_GUEST 3
+
 #include "io.h"
-int open(const char* path, int flags) {
+static int open(const char* path, int flags) {
     outb(0x278, V_FILE_OPEN);
     // filename
     while (*path) {
@@ -23,7 +23,7 @@ int open(const char* path, int flags) {
     return (int)(int8_t)inb(0x278);
 }
 
-int write(int fd, const char* buf, int count) {
+static int write(int fd, const char* buf, int count) {
     outb(0x278, V_FILE_WRITE);
     outb(0x278, (uint8_t)fd);
     outb(0x278, (uint8_t)count);
@@ -33,7 +33,7 @@ int write(int fd, const char* buf, int count) {
     return (int)(int8_t)inb(0x278);
 }
 
-int read(int fd, char* buf, int count) {
+static int read(int fd, char* buf, int count) {
     outb(0x278, V_FILE_READ);
     outb(0x278, (uint8_t)fd);
     outb(0x278, (uint8_t)count);
@@ -44,12 +44,12 @@ int read(int fd, char* buf, int count) {
     return n;
 }
 
-int close(int fd) {
+static int close(int fd) {
     outb(0x278, V_FILE_CLOSE);
     outb(0x278, (uint8_t)fd);
     return (int)(int8_t)inb(0x278);
 }
-int lseek(int fd, const int offset, int off_flag) {
+static int lseek(int fd, const int offset, int off_flag) {
     uint32_t uoffset = (uint32_t)(int32_t)offset;
     outb(0x278, (uint8_t)V_FILE_LSEEK);
 

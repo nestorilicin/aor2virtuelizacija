@@ -102,19 +102,19 @@ void vm_destroy(struct vm* v) {
 
 static void setup_segments_64(struct kvm_sregs* sregs) {
     struct kvm_segment code = {
-        .base = 0,
-        .limit = 0xffffffff,
-        .present = 1,
-        .type = 11,
-        .dpl = 0,
-        .db = 0,
-        .s = 1,
-        .l = 1,
-        .g = 1,
+        .base     = 0,
+        .limit    = 0xffffffff,
+        .present  = 1,
+        .type     = 11,
+        .dpl      = 0,
+        .db       = 0,
+        .s        = 1,
+        .l        = 1,
+        .g        = 1,
     };
     struct kvm_segment data = code;
-    data.type = 3;
-    data.l = 0;
+    data.type     = 3;
+    data.l        = 0;
 
     sregs->cs = code;
     sregs->ds = sregs->es = sregs->fs = sregs->gs = sregs->ss = data;
@@ -122,7 +122,6 @@ static void setup_segments_64(struct kvm_sregs* sregs) {
 
 void setup_long_mode(struct vm* v, struct kvm_sregs* sregs, int page_size) {
     const uint64_t two_mega = 2ULL * 1024 * 1024;
-    // unsigned long long four_kilo = 4 * 1024;
 
     uint64_t pml4_addr = 0x1000;
     uint64_t* pml4 = (void*)(v->mem + pml4_addr);
@@ -133,21 +132,16 @@ void setup_long_mode(struct vm* v, struct kvm_sregs* sregs, int page_size) {
     uint64_t pd_addr = 0x3000;
     uint64_t* pd = (void*)(v->mem + pd_addr);
 
-    // uint64_t pt_addr = 0x4000;
-    // uint64_t *pt = (void *)(v->mem + pt_addr);
-
     memset(pml4, 0, 0x1000);
     memset(pdpt, 0, 0x1000);
     memset(pd, 0, 0x1000);
 
     pml4[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pdpt_addr;
     pdpt[0] = PDE64_PRESENT | PDE64_RW | PDE64_USER | pd_addr;
-    // pd[0]   = PDE64_PRESENT | PDE64_RW | PDE64_USER | pt_addr;
 
     int num_pd_entries = (int)(v->mem_size / two_mega);
     switch (page_size) {
         case 4: {
-            // 4KB
             uint64_t first_pt_addr = 0x10000;
             for (int pd_idx = 0; pd_idx < num_pd_entries; pd_idx++) {
                 uint64_t pt_addr = first_pt_addr + pd_idx * 0x1000;
@@ -162,20 +156,18 @@ void setup_long_mode(struct vm* v, struct kvm_sregs* sregs, int page_size) {
             break;
         }
         case 2: {
-            // 2MB
             for (int single_pd = 0; single_pd < num_pd_entries; single_pd++) {
                 pd[single_pd] = (single_pd * two_mega) | PDE64_PRESENT | PDE64_RW | PDE64_USER | PDE64_PS;
             }
             break;
         }
-        default: {
+        default:
             break;
-        }
     }
 
-    sregs->cr3 = pml4_addr;
-    sregs->cr4 = CR4_PAE;
-    sregs->cr0 = CR0_PE | CR0_PG;
+    sregs->cr3  = pml4_addr;
+    sregs->cr4  = CR4_PAE;
+    sregs->cr0  = CR0_PE | CR0_PG;
     sregs->efer = EFER_LME | EFER_LMA;
     setup_segments_64(sregs);
 }

@@ -83,7 +83,7 @@ static int validate_filename(const char* name) {
         return 0;
     for (const char* p = name; *p; ++p) {
         unsigned char c = (unsigned char)*p;
-        if (isalpha(c) || isdigit(c) || c == '.' || c == '_')
+        if (isalpha(c) || isdigit(c) || c == '.' || c == '_') // ovo sam dodo ja da sme prvo slovo i _ da bude
             continue;
         return 0;
     }
@@ -105,9 +105,6 @@ int map_fd(struct vm_args* va, int guest_fd) {
 }
 
 int guest_flags_to_host(int guest_flags) {
-    if (guest_flags == 9) {
-        return O_WRONLY | O_APPEND;
-    }
     int host_flags = 0;
     if (guest_flags & 4)
         host_flags |= O_RDWR;
@@ -126,7 +123,7 @@ void process_open(struct vm_args* va, struct parser_state* ps, uint8_t value) {
     outb(cmd=V_FILE_OPEN),
     outb(char) for each character of the filename,
     outb(0)  (terminator, marks end of filename),
-    outb(flags)  (O_RD=1, O_WR=2, O_RDWR=4, O_CREATE=8, O_APPEND=9)
+    outb(flags)  (O_RD=1, O_WR=2, O_RDWR=4, O_CREATE=8)
     result: 1 inb call returning the guest fd (signed 8-bit) or -1 on error
     */
 
@@ -319,8 +316,6 @@ void process_lseek(struct vm_args* va, struct parser_state* ps, uint8_t value) {
             int wh = SEEK_SET;
             if (ps->l_whence == 2)
                 wh = SEEK_END;
-            else if (ps->l_whence == 3)
-                wh = SEEK_CUR;
             int32_t soff = (int32_t)ps->l_offset_acc;
             res = lseek(host_fd, (off_t)soff, wh);
         }
