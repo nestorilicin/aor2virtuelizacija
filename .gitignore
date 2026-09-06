@@ -7,4 +7,3 @@ host/build/
 *.out
 *.elf
 *.txt
-test/
