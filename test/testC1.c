@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include "interrupts.h"
+#include "descriptors.h"
 #include "io.h"
 
 static __attribute__((noreturn)) void halt_forever(void) {
