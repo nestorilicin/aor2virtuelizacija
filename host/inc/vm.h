@@ -67,7 +67,7 @@ struct vm_args {
     int read_buffer_pos;
     int read_pending;
 
-    struct shared_list* shared_files; /* pokazivač na globalnu listu u main */
+    struct shared_list* shared_files; // pokazivač na globalnu listu u main
     int shared_count;
 
     struct cow_entry cow_map[MAX_COW_ENTRIES];
@@ -97,6 +97,7 @@ struct vm_args {
 
     uint32_t r_last_seq;
 
+    uint32_t r_count_snapshot;
 };
 
 int vm_init(struct vm* v, size_t mem_size);

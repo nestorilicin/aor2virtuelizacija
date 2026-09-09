@@ -17,6 +17,9 @@
 #define O_WR 2
 #define O_CREATE 8
 
+#define SIGNAL_KILL_COUNT 0xFFFFFFFFu
+#define SIGNAL_PRINT_STOP_COUNT 0xFFFFFFFEu
+
 static inline void outb_u32(uint16_t port, uint32_t value) {
     outb(port, (uint8_t)(value & 0xFF));
     outb(port, (uint8_t)((value >> 8) & 0xFF));
@@ -62,6 +65,11 @@ static void __attribute__((interrupt, target("general-regs-only"))) irq32_handle
 
             
             (void)inb_u32(PORT_SHARED_ACK);
+
+            char cmd = (char)inb(0xE9);
+            if (cmd == 'k') {
+                asm volatile("int $34");
+            }
         }
  
     } else {
@@ -71,6 +79,13 @@ static void __attribute__((interrupt, target("general-regs-only"))) irq32_handle
         while (1) {
             uint32_t count = inb_u32(PORT_SHARED_DATA);
  
+            if (count == SIGNAL_KILL_COUNT) {
+                asm volatile("int $34");
+            }
+            if (count == SIGNAL_PRINT_STOP_COUNT) {
+                asm volatile("int $35");
+                break;
+            }
             if (count == 0) {
                 outb_u32(PORT_SHARED_ACK, 0);
                 break;
@@ -89,6 +104,20 @@ static void __attribute__((interrupt, target("general-regs-only"))) irq32_handle
             close(fd);
     }
 }
+static void __attribute__((interrupt, target("general-regs-only"))) irq34_handler(struct interrupt_frame* frame) {
+    (void)frame;
+    for (;;) {
+        asm volatile("hlt");
+    }
+}
+
+static void __attribute__((interrupt, target("general-regs-only"))) irq35_handler(struct interrupt_frame* frame) {
+    (void)frame;
+    const char *s;
+    for (s = "Hello World!\n"; *s; ++s)
+        outb(0xE9, (uint8_t)*s);
+    
+}
 // danko kod
 static struct idt_entry idt[IDT_ENTRIES];
 static void set_idt_gate(unsigned n, void (*handler)(struct interrupt_frame*)) {
@@ -106,6 +135,8 @@ void init_idt(void) {
     struct dt_ptr p;
 
     set_idt_gate(32, irq32_handler);
+    set_idt_gate(34, irq34_handler);
+    set_idt_gate(35, irq35_handler);
 
     p.limit = sizeof(idt) - 1;
     p.base = (uint64_t)(uintptr_t)idt;

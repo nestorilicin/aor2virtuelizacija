@@ -15,6 +15,7 @@ int shared_init(int total_readers){
     g_shared.data_ready = 0;
     g_shared.readers_done = 0;
     g_shared.buf_len = 0;
+    g_shared.stop_signal = STOP_SIGNAL_NONE;
     return 0;
 }   
 

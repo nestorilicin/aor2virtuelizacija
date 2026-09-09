@@ -8,6 +8,10 @@
 #define VM_ROLE_READER 0
 #define VM_ROLE_WRITER 1
 
+#define STOP_SIGNAL_NONE 0
+#define STOP_SIGNAL_KILL 1
+#define STOP_SIGNAL_PRINT 2
+
 struct shared_state {
     pthread_mutex_t mutex;
     pthread_cond_t cond_data;
@@ -21,6 +25,7 @@ struct shared_state {
     int readers_done;
 
     uint32_t seq;
+    int stop_signal;
 
 };
 

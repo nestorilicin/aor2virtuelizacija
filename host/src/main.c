@@ -92,17 +92,25 @@ static void handle_port_510(struct vm_args* va, char* kvm_run_ptr) {
                 while (!g_shared.data_ready || g_shared.seq == va->r_last_seq)
                     pthread_cond_wait(&g_shared.cond_data, &g_shared.mutex);
                 va->r_last_seq = g_shared.seq;
+
+                if (g_shared.stop_signal == STOP_SIGNAL_KILL) {
+                    va->r_count_snapshot = 0xFFFFFFFFu;
+                } else if (g_shared.stop_signal == STOP_SIGNAL_PRINT) {
+                    va->r_count_snapshot = 0xFFFFFFFEu;
+                } else {
+                    va->r_count_snapshot = g_shared.buf_len;
+                }
             } else {
                 while (!g_shared.data_ready)
                     pthread_cond_wait(&g_shared.cond_data, &g_shared.mutex);
             }
 
-            *dst = (uint8_t)((g_shared.buf_len >> (8 * va->r_count_pos)) & 0xFF);
+            *dst = (uint8_t)((va->r_count_snapshot >> (8 * va->r_count_pos)) & 0xFF);
             pthread_mutex_unlock(&g_shared.mutex);
 
             va->r_count_pos++;
             if (va->r_count_pos == 4) {
-                va->r_count = g_shared.buf_len;
+                va->r_count = va->r_count_snapshot;
                 va->r_data_pos = 0;
             }
         } else if (va->r_data_pos < va->r_count) {
@@ -235,6 +243,7 @@ void* run_vm(void* arg) {
     va->r_ack_pos = 0;
     va->r_ack_acc = 0;
     va->r_last_seq = (uint32_t)(-1);
+    va->r_count_snapshot = 0;
 
     struct parser_state ps;
     parser_init(&ps);
@@ -256,7 +265,23 @@ void* run_vm(void* arg) {
                         char ch = *(p + va->v.run->io.data_offset);
                         console_write_char(va, ch);
                     } else if (va->v.run->io.direction == KVM_EXIT_IO_IN) {
-                        *(p + va->v.run->io.data_offset) = getchar();
+                        //*(p + va->v.run->io.data_offset) = getchar();
+                        int c = getchar();
+                        *(p + va->v.run->io.data_offset) = (uint8_t)c;
+                        if(va->irq_role == VM_ROLE_WRITER && ((c == 'l') || (c == 'k'))){
+                            pthread_mutex_lock(&g_shared.mutex);
+                            if(c == 'k'){
+                                g_shared.stop_signal = STOP_SIGNAL_KILL;
+                            }
+                            if(c == 'l'){
+                                g_shared.stop_signal = STOP_SIGNAL_PRINT;
+                                g_shared.total_readers = 0;
+                            }
+                            g_shared.seq++;
+                            g_shared.data_ready = 1;
+                            pthread_cond_broadcast(&g_shared.cond_data);
+                            pthread_mutex_unlock(&g_shared.mutex);
+                        }
                     }
                     break;
                 }

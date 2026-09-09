@@ -1,7 +1,13 @@
-#include "descriptors.h"
+#include <stdint.h>
 #include "interrupts.h"
+#include "descriptors.h"
 #include "io.h"
 
+static __attribute__((noreturn)) void halt_forever(void) {
+    for (;;)
+        asm volatile("hlt");
+}
+ 
 static struct gdt_entry gdt[3];
 
 void
@@ -50,10 +56,5 @@ _start(void)
 
 	asm volatile("sti");
 
-	const char *s;
-	for (s = "Hello, world!\n"; *s; ++s)
-		outb(0xE9, *s);
-
-	for (;;)
-		asm volatile("hlt");
+	halt_forever();
 }
