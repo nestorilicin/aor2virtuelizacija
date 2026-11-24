@@ -417,7 +417,7 @@ int main(int argc, char* argv[]) {
 
     struct shared_list shared_files[MAX_SHARED_FILES];
     int shared_count = 0;
-    // Parsiranje argumenata - uradio robot
+    // Argument parsing
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "-m") || !strcmp(argv[i], "--memory")) {
             mem_size = atoi(argv[++i]) << 20;
